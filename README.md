@@ -30,7 +30,47 @@ doctl auth init
 doctl account get
 ```
 
-## Step 0: Request GPU Access
+### Configure Environment Variables
+
+This lab uses a `.env` file to manage configuration variables. A template `.env.example` file is provided.
+
+```bash
+# Copy the example file to create your .env file
+cp .env.example .env
+
+# Edit the .env file with your configuration
+nano .env
+
+# Or use your preferred editor
+# vim .env
+# code .env
+```
+
+**Important**: Make sure to update the `NVIDIA_API_KEY` in the `.env` file with your actual NVIDIA API key before proceeding.
+
+## Step 0: Validate GPU Availability and Request Access
+
+### Check Available GPU Nodes in Your Region
+
+Before creating a cluster, let's verify what GPU nodes are available in your target region:
+
+```bash
+# Check available GPU node sizes in Toronto region
+doctl compute size list --format ID,Slug,Memory,CPUs,Disk,PriceMonthly,PriceHourly | grep gpu
+
+# Check if H100 nodes are available in tor1 region
+doctl compute size list --format ID,Slug,Memory,CPUs,Disk,PriceMonthly,PriceHourly | grep h100
+
+# Verify Kubernetes cluster creation with GPU nodes in tor1
+doctl kubernetes cluster create --help | grep -A 10 "node-pool"
+```
+
+### Expected Output for H100 Nodes:
+```
+gpu-h100x1-80gb            H100 GPU - 1X                    245760     20     720     2522.16          3.390000
+```
+
+### Request GPU Access (if needed)
 
 DigitalOcean requires that you request access to GPU nodes before you can provision them.
 
@@ -46,16 +86,19 @@ DigitalOcean requires that you request access to GPU nodes before you can provis
 If you need to create a new cluster with H100 GPU nodes:
 
 ```bash
-# Set environment variables for Toronto region
-export CLUSTER_NAME=nim-h100-cluster
-export REGION=tor1  # Toronto region
-export GPU_NODE_SIZE=gpu-20vcpu-240gb  # H100 GPU node
+# Load environment variables from .env file
+source .env
+
+# Verify environment variables are loaded
+echo "Cluster Name: $CLUSTER_NAME"
+echo "Region: $REGION"
+echo "GPU Node Size: $GPU_NODE_SIZE"
 
 # Create the cluster with H100 GPU node pool
 doctl kubernetes cluster create ${CLUSTER_NAME} \
   --region ${REGION} \
   --version latest \
-  --node-pool "name=h100-worker-pool;size=${GPU_NODE_SIZE};count=1"
+  --node-pool "name=${NODE_POOL_NAME};size=${GPU_NODE_SIZE};count=${NODE_POOL_COUNT}"
 
 # Download cluster credentials
 doctl kubernetes cluster kubeconfig save ${CLUSTER_NAME}
@@ -73,8 +116,12 @@ kubectl get nodes -o json | jq '.items[].status.allocatable | select(."nvidia.co
 If you already have a DigitalOcean Kubernetes cluster with an NVIDIA H100 GPU node:
 
 ```bash
-# Set your cluster name (replace with your actual cluster name)
-export CLUSTER_NAME=your-existing-cluster-name
+# Load environment variables from .env file
+source .env
+
+# Update CLUSTER_NAME in .env file to match your existing cluster
+# Or override it here:
+# export CLUSTER_NAME=your-existing-cluster-name
 
 # Download cluster credentials
 doctl kubernetes cluster kubeconfig save ${CLUSTER_NAME}
@@ -87,12 +134,12 @@ kubectl describe nodes | grep -A 5 "nvidia.com/gpu"
 kubectl get nodes -o json | jq '.items[].status.allocatable | select(."nvidia.com/gpu")'
 ```
 
-**H100 Node Specifications**:
+**H100 Node Specifications** (`gpu-h100x1-80gb`):
 - **GPU**: 1x NVIDIA H100 (80GB VRAM)
 - **vCPU**: 20 cores
-- **vRAM**: 240 GB
+- **vRAM**: 240 GB (245,760 MB)
 - **Storage**: 720 GB
-- **Cost**: $3.39/hour (~$2,500/month if running 24/7)
+- **Cost**: $3.39/hour (~$2,522/month if running 24/7)
 - **Region**: Toronto (tor1)
 
 ## Step 2: Install NVIDIA GPU Operator
@@ -118,16 +165,19 @@ kubectl get pods -n gpu-operator
 Deploy a larger model that can take advantage of the H100's 80GB VRAM. We'll use Llama 3.1 70B which is much more suitable for the H100's capabilities.
 
 ```bash
-# Set NVIDIA API key
-export NVIDIA_API_KEY="your-nvidia-api-key"
+# Load environment variables from .env file
+source .env
+
+# Set NVIDIA API key (update .env file with your actual API key)
+export NVIDIA_API_KEY="${NVIDIA_API_KEY}"
 
 # Create namespace for NIM
-kubectl create namespace nim
+kubectl create namespace ${NIM_NAMESPACE}
 
 # Create secret for NVIDIA API key
 kubectl create secret generic nim-api-key \
   --from-literal=api-key=${NVIDIA_API_KEY} \
-  -n nim
+  -n ${NIM_NAMESPACE}
 
 # Deploy NIM with Llama 3.1 70B model (better suited for H100)
 cat <<EOF | kubectl apply -f -
@@ -231,9 +281,12 @@ Install the monitoring stack to observe GPU performance and NIM metrics.
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm repo update
 
+# Load environment variables from .env file
+source .env
+
 # Install Prometheus stack
 helm install prometheus-stack prometheus-community/kube-prometheus-stack \
-  --namespace monitoring --create-namespace
+  --namespace ${MONITORING_NAMESPACE} --create-namespace
 ```
 
 ## Step 5: Configure Prometheus to Scrape DCGM Metrics
