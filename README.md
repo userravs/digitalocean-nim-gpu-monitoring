@@ -10,6 +10,26 @@ This lab guides you through deploying NVIDIA NIM on DigitalOcean Kubernetes (DOK
 - Helm installed
 - NVIDIA API key for NIM container access
 
+### Install and Configure doctl
+
+```bash
+# Install doctl (macOS with Homebrew)
+brew install doctl
+
+# Or download from GitHub releases
+# https://github.com/digitalocean/doctl/releases
+
+# Authenticate with your DigitalOcean API token
+doctl auth init
+
+# You'll be prompted to enter your API token
+# Get your API token from: https://cloud.digitalocean.com/account/api/tokens
+# Make sure to select "Full Access" scope
+
+# Verify authentication
+doctl account get
+```
+
 ## Step 0: Request GPU Access
 
 DigitalOcean requires that you request access to GPU nodes before you can provision them.
@@ -19,13 +39,23 @@ DigitalOcean requires that you request access to GPU nodes before you can provis
 3. In the request, explain your use case (e.g., "training AI models in a Kubernetes cluster")
 4. Wait for confirmation from DigitalOcean
 
-## Step 1: Connect to Your Existing DigitalOcean H100 Cluster
+## Step 1: Create or Connect to DigitalOcean H100 Cluster
 
-Since you already have a DigitalOcean Kubernetes cluster with an NVIDIA H100 GPU node, we'll connect to it instead of creating a new one.
+### Option A: Create a New H100 Cluster (Toronto Region)
+
+If you need to create a new cluster with H100 GPU nodes:
 
 ```bash
-# Set your cluster name (replace with your actual cluster name)
-export CLUSTER_NAME=your-cluster-name
+# Set environment variables for Toronto region
+export CLUSTER_NAME=nim-h100-cluster
+export REGION=tor1  # Toronto region
+export GPU_NODE_SIZE=gpu-20vcpu-240gb  # H100 GPU node
+
+# Create the cluster with H100 GPU node pool
+doctl kubernetes cluster create ${CLUSTER_NAME} \
+  --region ${REGION} \
+  --version latest \
+  --node-pool "name=h100-worker-pool;size=${GPU_NODE_SIZE};count=1"
 
 # Download cluster credentials
 doctl kubernetes cluster kubeconfig save ${CLUSTER_NAME}
@@ -38,12 +68,32 @@ kubectl describe nodes | grep -A 5 "nvidia.com/gpu"
 kubectl get nodes -o json | jq '.items[].status.allocatable | select(."nvidia.com/gpu")'
 ```
 
-**Note**: Your H100 node provides:
+### Option B: Connect to Existing H100 Cluster
+
+If you already have a DigitalOcean Kubernetes cluster with an NVIDIA H100 GPU node:
+
+```bash
+# Set your cluster name (replace with your actual cluster name)
+export CLUSTER_NAME=your-existing-cluster-name
+
+# Download cluster credentials
+doctl kubernetes cluster kubeconfig save ${CLUSTER_NAME}
+
+# Verify cluster connection and GPU node
+kubectl get nodes
+kubectl describe nodes | grep -A 5 "nvidia.com/gpu"
+
+# Verify H100 GPU is available
+kubectl get nodes -o json | jq '.items[].status.allocatable | select(."nvidia.com/gpu")'
+```
+
+**H100 Node Specifications**:
 - **GPU**: 1x NVIDIA H100 (80GB VRAM)
 - **vCPU**: 20 cores
 - **vRAM**: 240 GB
 - **Storage**: 720 GB
 - **Cost**: $3.39/hour (~$2,500/month if running 24/7)
+- **Region**: Toronto (tor1)
 
 ## Step 2: Install NVIDIA GPU Operator
 
