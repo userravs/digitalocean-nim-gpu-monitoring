@@ -19,28 +19,31 @@ DigitalOcean requires that you request access to GPU nodes before you can provis
 3. In the request, explain your use case (e.g., "training AI models in a Kubernetes cluster")
 4. Wait for confirmation from DigitalOcean
 
-## Step 1: Create the Kubernetes Cluster with GPU Nodes
+## Step 1: Connect to Your Existing DigitalOcean H100 Cluster
 
-Create a cluster with GPU nodes. This command creates a cluster with a node pool containing a GPU.
+Since you already have a DigitalOcean Kubernetes cluster with an NVIDIA H100 GPU node, we'll connect to it instead of creating a new one.
 
 ```bash
-# Set environment variables
-export CLUSTER_NAME=nim-monitoring-cluster
-export REGION=nyc1
-export GPU_NODE_SIZE=gpu-2vcpu-8gb  # T4 GPU for NIM workloads
-
-# Create the cluster with GPU node pool
-doctl kubernetes cluster create ${CLUSTER_NAME} \
-  --region ${REGION} \
-  --version latest \
-  --node-pool "name=gpu-worker-pool;size=${GPU_NODE_SIZE};count=1"
+# Set your cluster name (replace with your actual cluster name)
+export CLUSTER_NAME=your-cluster-name
 
 # Download cluster credentials
 doctl kubernetes cluster kubeconfig save ${CLUSTER_NAME}
 
-# Verify cluster connection
+# Verify cluster connection and GPU node
 kubectl get nodes
+kubectl describe nodes | grep -A 5 "nvidia.com/gpu"
+
+# Verify H100 GPU is available
+kubectl get nodes -o json | jq '.items[].status.allocatable | select(."nvidia.com/gpu")'
 ```
+
+**Note**: Your H100 node provides:
+- **GPU**: 1x NVIDIA H100 (80GB VRAM)
+- **vCPU**: 20 cores
+- **vRAM**: 240 GB
+- **Storage**: 720 GB
+- **Cost**: $3.39/hour (~$2,500/month if running 24/7)
 
 ## Step 2: Install NVIDIA GPU Operator
 
@@ -60,9 +63,9 @@ helm install --wait --generate-name \
 kubectl get pods -n gpu-operator
 ```
 
-## Step 3: Deploy NVIDIA NIM
+## Step 3: Deploy NVIDIA NIM (Optimized for H100)
 
-Deploy the Llama 3.1 8B model using NIM with proper GPU resource allocation.
+Deploy a larger model that can take advantage of the H100's 80GB VRAM. We'll use Llama 3.1 70B which is much more suitable for the H100's capabilities.
 
 ```bash
 # Set NVIDIA API key
@@ -76,7 +79,7 @@ kubectl create secret generic nim-api-key \
   --from-literal=api-key=${NVIDIA_API_KEY} \
   -n nim
 
-# Deploy NIM with Llama 3.1 8B model
+# Deploy NIM with Llama 3.1 70B model (better suited for H100)
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: ServiceAccount
@@ -109,44 +112,52 @@ roleRef:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: llama-3-1-8b
+  name: llama-3-1-70b
   namespace: nim
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: llama-3-1-8b
+      app: llama-3-1-70b
   template:
     metadata:
       labels:
-        app: llama-3-1-8b
+        app: llama-3-1-70b
     spec:
       serviceAccountName: nim-sa
       nodeSelector:
         nvidia.com/gpu: "1"
       containers:
-      - name: llama-3-1-8b
-        image: nvcr.io/nim/llama-3.1-8b:latest
+      - name: llama-3-1-70b
+        image: nvcr.io/nim/llama-3.1-70b:latest
         ports:
         - containerPort: 8000
         resources:
           limits:
             nvidia.com/gpu: 1
+            memory: "200Gi"  # H100 has 240GB RAM, leave some for system
+          requests:
+            nvidia.com/gpu: 1
+            memory: "200Gi"
         env:
         - name: NVIDIA_API_KEY
           valueFrom:
             secretKeyRef:
               name: nim-api-key
               key: api-key
+        - name: CUDA_VISIBLE_DEVICES
+          value: "0"
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: "all"
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: llama-3-1-8b-service
+  name: llama-3-1-70b-service
   namespace: nim
 spec:
   selector:
-    app: llama-3-1-8b
+    app: llama-3-1-70b
   ports:
   - port: 8000
     targetPort: 8000
@@ -156,6 +167,9 @@ EOF
 # Verify NIM deployment
 kubectl get pods -n nim
 kubectl get svc -n nim
+
+# Monitor pod startup (H100 models take longer to load)
+kubectl logs -f deployment/llama-3-1-70b -n nim
 ```
 
 ## Step 4: Install Prometheus and Grafana for Monitoring
@@ -228,26 +242,28 @@ Test the NIM deployment while monitoring GPU usage in Grafana.
 
 ```bash
 # Get external IP of NIM service
-EXTERNAL_IP=$(kubectl get svc llama-3-1-8b-service -n nim -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+EXTERNAL_IP=$(kubectl get svc llama-3-1-70b-service -n nim -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
 
-# Test NIM API
+# Test NIM API with a more complex prompt to showcase H100 capabilities
 curl -X POST "http://$EXTERNAL_IP:8000/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "llama-3.1-8b",
+    "model": "llama-3.1-70b",
     "messages": [
-      {"role": "user", "content": "Hello, how are you?"}
+      {"role": "user", "content": "Explain the differences between transformer architectures and how they impact model performance. Provide a detailed technical analysis."}
     ],
-    "max_tokens": 100
+    "max_tokens": 500,
+    "temperature": 0.7
   }'
 ```
 
 While the API call is running, observe in Grafana:
-- GPU utilization
-- VRAM usage
-- Temperature
-- Power consumption
-- Memory bandwidth
+- **GPU utilization** (should see high usage with 70B model)
+- **VRAM usage** (expect ~40-60GB usage for Llama 3.1 70B)
+- **Temperature** (H100 can handle up to 83°C)
+- **Power consumption** (H100 can draw up to 700W)
+- **Memory bandwidth** (H100 has 3.35 TB/s bandwidth)
+- **Inference latency** (should be much faster than smaller GPUs)
 
 ## Step 8: Advanced Monitoring Setup
 
@@ -267,7 +283,7 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app: llama-3-1-8b
+      app: llama-3-1-70b
   endpoints:
   - port: 8000
     interval: 30s
@@ -292,29 +308,84 @@ spec:
   - name: gpu.rules
     rules:
     - alert: HighGPUTemperature
-      expr: DCGM_FI_DEV_GPU_TEMP > 80
+      expr: DCGM_FI_DEV_GPU_TEMP > 85  # H100 can handle higher temps
       for: 5m
       labels:
         severity: warning
       annotations:
-        summary: "GPU temperature is high"
-        description: "GPU temperature is {{ \$value }}°C"
+        summary: "H100 GPU temperature is high"
+        description: "H100 GPU temperature is {{ \$value }}°C"
     - alert: HighGPUUtilization
       expr: DCGM_FI_DEV_GPU_UTIL > 95
       for: 10m
       labels:
         severity: info
       annotations:
-        summary: "GPU utilization is very high"
-        description: "GPU utilization is {{ \$value }}%"
+        summary: "H100 GPU utilization is very high"
+        description: "H100 GPU utilization is {{ \$value }}%"
+    - alert: HighVRAMUsage
+      expr: DCGM_FI_DEV_FB_USED / DCGM_FI_DEV_FB_TOTAL > 0.9
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "H100 VRAM usage is very high"
+        description: "H100 VRAM usage is {{ \$value | humanizePercentage }}"
 EOF
 ```
 
-## Step 9: Cleanup
+## Step 9: Cost Optimization Tips
 
-To avoid unexpected charges, delete the cluster when finished:
+Since your H100 cluster costs $3.39/hour (~$2,500/month if running 24/7), here are some cost optimization strategies:
 
+### Scale Down When Not in Use
 ```bash
+# Scale down NIM deployment to 0 replicas when not needed
+kubectl scale deployment llama-3-1-70b --replicas=0 -n nim
+
+# Scale back up when needed
+kubectl scale deployment llama-3-1-70b --replicas=1 -n nim
+```
+
+### Use Horizontal Pod Autoscaler (HPA)
+```bash
+# Install metrics-server if not already installed
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+
+# Create HPA for NIM deployment
+kubectl autoscale deployment llama-3-1-70b --cpu-percent=50 --min=0 --max=1 -n nim
+```
+
+### Monitor Costs
+```bash
+# Check current resource usage
+kubectl top nodes
+kubectl top pods -n nim
+
+# Monitor GPU utilization
+kubectl exec -n gpu-operator deployment/nvidia-dcgm-exporter -- nvidia-smi
+```
+
+### Schedule Workloads
+Consider using Kubernetes CronJobs for batch processing during off-peak hours to optimize costs.
+
+## Step 10: Cleanup
+
+**Important**: Your H100 cluster costs $3.39/hour. To avoid unexpected charges:
+
+### Option 1: Scale Down (Recommended for temporary pause)
+```bash
+# Scale down all workloads
+kubectl scale deployment llama-3-1-70b --replicas=0 -n nim
+kubectl scale deployment prometheus-stack-grafana --replicas=0 -n monitoring
+kubectl scale deployment prometheus-stack-prometheus --replicas=0 -n monitoring
+
+# The cluster will still cost $3.39/hour but with minimal resource usage
+```
+
+### Option 2: Delete Cluster (Only if you're completely done)
+```bash
+# WARNING: This will delete your entire cluster and all data
 doctl kubernetes cluster delete ${CLUSTER_NAME}
 ```
 
@@ -328,19 +399,22 @@ This lab successfully demonstrates:
 4. **MLOps Best Practices**: Using Helm for reproducible deployments and Kubernetes for scaling
 5. **Performance Analysis**: Monitoring GPU utilization, memory usage, and application performance
 
-## Key Advantages of DigitalOcean Approach
+## Key Advantages of DigitalOcean H100 Approach
 
-- ✅ No GPU quota restrictions
-- ✅ Predictable pricing (~$40-160/month for GPU nodes)
-- ✅ Immediate GPU access after approval
-- ✅ Simpler setup compared to GCP
-- ✅ Comprehensive monitoring capabilities
-- ✅ Easy scaling and resource management
+- ✅ **High-Performance GPU**: H100 with 80GB VRAM for large models
+- ✅ **Predictable Pricing**: $3.39/hour (~$2,500/month for 24/7 usage)
+- ✅ **No GPU quota restrictions**: Unlike other cloud providers
+- ✅ **Immediate GPU access**: After approval process
+- ✅ **Comprehensive monitoring**: Full GPU metrics and application monitoring
+- ✅ **Easy scaling**: Kubernetes-native scaling and resource management
+- ✅ **Cost optimization**: Scale down when not in use to save costs
 
 ## Next Steps
 
-1. **Scale the deployment**: Add more GPU nodes to handle increased load
+1. **Optimize for H100**: Experiment with larger models (Llama 3.1 405B, Mixtral 8x22B)
 2. **Implement auto-scaling**: Use HPA and VPA for dynamic resource allocation
-3. **Add more models**: Deploy additional NIM models for different use cases
+3. **Add more models**: Deploy multiple NIM models for different use cases
 4. **Set up CI/CD**: Automate model deployment and updates
 5. **Production hardening**: Implement security policies, network policies, and backup strategies
+6. **Cost monitoring**: Set up billing alerts and usage tracking
+7. **Batch processing**: Use CronJobs for scheduled model training/inference
