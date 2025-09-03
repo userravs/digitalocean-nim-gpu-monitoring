@@ -9,9 +9,12 @@ This comprehensive guide covers the complete setup and configuration of monitori
 3. [Installation Steps](#installation-steps)
 4. [Configuration](#configuration)
 5. [Accessing Monitoring Tools](#accessing-monitoring-tools)
-6. [Dashboard Setup](#dashboard-setup)
-7. [Troubleshooting](#troubleshooting)
-8. [Best Practices](#best-practices)
+6. [Checking Available Metrics](#checking-available-metrics)
+7. [Dashboard Setup](#dashboard-setup)
+8. [Monitoring NIM Applications](#monitoring-nim-applications)
+9. [Alerting Configuration](#alerting-configuration)
+10. [Troubleshooting](#troubleshooting)
+11. [Best Practices](#best-practices)
 
 ## Prerequisites
 
@@ -182,6 +185,118 @@ kubectl port-forward service/kube-prometheus-stack-*-alertmanager 9093:9093 -n p
 ```
 
 **Access URL**: `http://localhost:9093`
+
+## Checking Available Metrics
+
+### Method 1: Prometheus Web UI (Most User-Friendly)
+
+1. **Access Prometheus**: `http://localhost:9090`
+2. **Go to Graph** tab
+3. **Type `DCGM`** in the query box
+4. **Use the dropdown** to browse all available metrics
+5. **Click on any metric** to see its current value and labels
+
+**Features:**
+- Real-time metric browsing
+- Query testing with instant results
+- Metric metadata and descriptions
+- Label exploration
+
+### Method 2: Grafana Explore (Best for Dashboard Building)
+
+1. **Access Grafana**: `http://localhost:3000`
+2. **Go to Explore** (compass icon in sidebar)
+3. **Select Prometheus** as data source
+4. **Type `DCGM`** in the query box
+5. **Use autocomplete** to see all available metrics
+6. **Test queries** before adding to dashboards
+
+**Features:**
+- Query builder with autocomplete
+- Real-time visualization
+- Multiple query testing
+- Easy dashboard integration
+
+### Method 3: Command Line (For Scripting and Automation)
+
+**Get All DCGM Metrics:**
+```bash
+curl -s "http://localhost:9090/api/v1/label/__name__/values" | jq '.data' | grep -i dcgm
+```
+
+**Get All Available Metrics:**
+```bash
+curl -s "http://localhost:9090/api/v1/label/__name__/values" | jq '.data'
+```
+
+**Test Specific Metric Values:**
+```bash
+# GPU Utilization
+curl -s "http://localhost:9090/api/v1/query?query=DCGM_FI_DEV_GPU_UTIL" | jq '.data.result[0].value[1]'
+
+# GPU Temperature
+curl -s "http://localhost:9090/api/v1/query?query=DCGM_FI_DEV_GPU_TEMP" | jq '.data.result[0].value[1]'
+
+# Power Usage
+curl -s "http://localhost:9090/api/v1/query?query=DCGM_FI_DEV_POWER_USAGE" | jq '.data.result[0].value[1]'
+```
+
+### Available DCGM Metrics (21 Total)
+
+**Core GPU Metrics:**
+- `DCGM_FI_DEV_GPU_UTIL` - GPU utilization percentage
+- `DCGM_FI_DEV_MEM_COPY_UTIL` - Memory utilization percentage
+- `DCGM_FI_DEV_GPU_TEMP` - GPU temperature in Celsius
+- `DCGM_FI_DEV_MEMORY_TEMP` - GPU memory temperature
+- `DCGM_FI_DEV_POWER_USAGE` - Power consumption in watts
+- `DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION` - Total energy since boot
+
+**Memory Metrics:**
+- `DCGM_FI_DEV_FB_USED` - Frame buffer memory used
+- `DCGM_FI_DEV_FB_FREE` - Frame buffer memory free
+
+**Clock Metrics:**
+- `DCGM_FI_DEV_SM_CLOCK` - SM clock frequency in MHz
+- `DCGM_FI_DEV_MEM_CLOCK` - Memory clock frequency in MHz
+
+**PCIe & NVLink:**
+- `DCGM_FI_DEV_PCIE_REPLAY_COUNTER` - PCIe retries
+- `DCGM_FI_DEV_NVLINK_BANDWIDTH_TOTAL` - NVLink bandwidth
+- `DCGM_FI_PROF_PCIE_RX_BYTES` - PCIe receive bytes
+- `DCGM_FI_PROF_PCIE_TX_BYTES` - PCIe transmit bytes
+
+**Video Processing:**
+- `DCGM_FI_DEV_ENC_UTIL` - Encoder utilization
+- `DCGM_FI_DEV_DEC_UTIL` - Decoder utilization
+
+**Error & Health:**
+- `DCGM_FI_DEV_XID_ERRORS` - XID errors
+- `DCGM_FI_DEV_ROW_REMAP_FAILURE` - Row remap failures
+- `DCGM_FI_DEV_CORRECTABLE_REMAPPED_ROWS` - Correctable remapped rows
+- `DCGM_FI_DEV_UNCORRECTABLE_REMAPPED_ROWS` - Uncorrectable remapped rows
+- `DCGM_FI_DEV_VGPU_LICENSE_STATUS` - vGPU license status
+
+### Quick Metric Testing
+
+**Test GPU Utilization:**
+```promql
+DCGM_FI_DEV_GPU_UTIL{gpu="0"}
+```
+
+**Test Multiple GPUs:**
+```promql
+DCGM_FI_DEV_GPU_UTIL
+```
+
+**Test with Node Labels:**
+```promql
+DCGM_FI_DEV_GPU_TEMP{kubernetes_node="h100-worker-pool-2al3y"}
+```
+
+**Test Rate of Change:**
+```promql
+rate(DCGM_FI_DEV_POWER_USAGE[5m])
+```
 
 ## Dashboard Setup
 
