@@ -1,6 +1,25 @@
-# Lab: Deploy NVIDIA NIM on DigitalOcean with GPU Monitoring
+# Lab: Deploy NVIDIA NIM on DigitalOcean with GPU Support
 
-This lab guides you through deploying NVIDIA NIM on DigitalOcean Kubernetes (DOKS) with comprehensive GPU monitoring using Prometheus and Grafana.
+This lab guides you through deploying NVIDIA NIM on DigitalOcean Kubernetes (DOKS) with GPU support and proper authentication setup.
+
+## Quick Start Summary
+
+**Correct Order of Steps:**
+1. **Prerequisites** - Install doctl, kubectl, Helm, get NGC API key
+2. **Step 1** - Create H100 GPU cluster on DigitalOcean
+3. **Step 2** - Install NVIDIA Device Plugin for basic GPU support
+4. **Step 3** - Install NVIDIA GPU Operator with proper tolerations
+5. **Step 3.5** - Add GPU Node Labels (required for DCGM Exporter)
+6. **Step 4** - Deploy NVIDIA NIM with proper authentication secrets
+7. **Step 5** - Test NIM API functionality
+8. **Step 6** - Cost optimization strategies
+9. **Step 7** - Cleanup procedures
+
+**Key Requirements:**
+- Valid NGC API key in `.env` file as `NVIDIA_API_KEY`
+- GPU operator installation with tolerations (required for NIM)
+- Manual GPU node labeling (required for DCGM Exporter on DigitalOcean)
+- Correct secret names: `NGC_API_KEY` (not `NGC_CLI_API_KEY`)
 
 ## Prerequisites
 
@@ -60,51 +79,13 @@ curl -H "Authorization: Bearer YOUR_NGC_API_KEY" \
 # If failed, you'll get a 401 error - update your API key
 ```
 
-## Step 0: Validate GPU Availability and Request Access
 
-### Check Available GPU Nodes in Your Region
 
-Before creating a cluster, let's verify what GPU nodes are available in your target region:
-
-```bash
-# Check available GPU node sizes in Toronto region
-doctl compute size list --format ID,Slug,Memory,CPUs,Disk,PriceMonthly,PriceHourly | grep gpu
-
-# Check if H100 nodes are available in tor1 region
-doctl compute size list --format ID,Slug,Memory,CPUs,Disk,PriceMonthly,PriceHourly | grep h100
-
-# Verify Kubernetes cluster creation with GPU nodes in tor1
-doctl kubernetes cluster create --help | grep -A 10 "node-pool"
-```
-
-### Expected Output for H100 Nodes:
-```
-gpu-h100x1-80gb            H100 GPU - 1X                    245760     20     720     2522.16          3.390000
-```
-
-### Request GPU Access (if needed)
-
-DigitalOcean requires that you request access to GPU nodes before you can provision them.
-
-1. Go to your DigitalOcean control panel
-2. Submit a support ticket requesting access to GPU Droplets or nodes
-3. In the request, explain your use case (e.g., "training AI models in a Kubernetes cluster")
-4. Wait for confirmation from DigitalOcean
-
-## Step 1: Create or Connect to DigitalOcean H100 Cluster
-
-### Option A: Create a New H100 Cluster (Toronto Region)
-
-If you need to create a new cluster with H100 GPU nodes:
+## Step 1: Create DigitalOcean H100 Cluster
 
 ```bash
 # Load environment variables from .env file
 source .env
-
-# Verify environment variables are loaded
-echo "Cluster Name: $CLUSTER_NAME"
-echo "Region: $REGION"
-echo "GPU Node Size: $GPU_NODE_SIZE"
 
 # Create the cluster with H100 GPU node pool
 doctl kubernetes cluster create ${CLUSTER_NAME} \
@@ -112,73 +93,26 @@ doctl kubernetes cluster create ${CLUSTER_NAME} \
   --version latest \
   --node-pool "name=${NODE_POOL_NAME};size=${GPU_NODE_SIZE};count=${NODE_POOL_COUNT}"
 
-# Download cluster credentials
-doctl kubernetes cluster kubeconfig save ${CLUSTER_NAME}
-
-# Verify cluster connection and GPU node
-kubectl get nodes
-kubectl describe nodes | grep -A 5 "nvidia.com/gpu"
-
-# Verify H100 GPU is available
-kubectl get nodes -o json | jq '.items[].status.allocatable | select(."nvidia.com/gpu")'
-```
-
-### Option B: Connect to Existing H100 Cluster
-
-If you already have a DigitalOcean Kubernetes cluster with an NVIDIA H100 GPU node:
-
-```bash
-# Load environment variables from .env file
-source .env
-
-# Update CLUSTER_NAME in .env file to match your existing cluster
-# Or override it here:
-# export CLUSTER_NAME=your-existing-cluster-name
+# Expected output and timing:
+# Notice: Cluster is provisioning, waiting for cluster to be running
+# .......................................................................................
+# Notice: Cluster created, fetching credentials
+# Notice: Adding cluster credentials to kubeconfig file found in "/Users/ravs/.kube/config"
+# Notice: Setting current-context to do-tor1-nim-h100-cluster
+# ID                                      Name                Region    Version        Auto Upgrade    Status     Node Pools
+# 31e8a775-a347-4f17-aca6-871606d7bb25    nim-h100-cluster    tor1      1.33.1-do.3    false           running    h100-worker-pool
+# doctl kubernetes cluster create ${CLUSTER_NAME} --region ${REGION} --version   0.19s user 0.08s system 0% cpu 7:49.82 total
+#
+# Note: Cluster creation typically takes 7-10 minutes for H100 GPU nodes
 
 # Download cluster credentials
 doctl kubernetes cluster kubeconfig save ${CLUSTER_NAME}
 
-# Verify cluster connection and GPU node
+# Verify cluster connection
 kubectl get nodes
-kubectl describe nodes | grep -A 5 "nvidia.com/gpu"
-
-# Verify H100 GPU is available
-kubectl get nodes -o json | jq '.items[].status.allocatable | select(."nvidia.com/gpu")'
 ```
 
-**H100 Node Specifications** (`gpu-h100x1-80gb`):
-- **GPU**: 1x NVIDIA H100 (Hopper Architecture)
-- **VRAM**: 80 GB HBM3 Memory
-- **System RAM**: 240 GiB
-- **vCPU**: 20 cores
-- **Boot Disk**: 720 GiB NVMe SSD
-- **Scratch Disk**: 5 TiB NVMe SSD
-- **Cost**: $3.39/hour (~$2,522/month if running 24/7)
-- **Region**: Toronto (tor1)
-
-**References:**
-- [DigitalOcean GPU Droplets](https://www.digitalocean.com/products/gradient/gpu-droplets)
-- [NVIDIA Hopper Architecture](https://www.nvidia.com/en-us/data-center/technologies/hopper-architecture/)
-
-## Step 2: Install NVIDIA Device Plugin (Required for DigitalOcean GPU Support)
-
-**Important**: DigitalOcean GPU nodes come with GPU labels but require manual installation of the NVIDIA device plugin to expose GPU resources to Kubernetes.
-
-### Verify GPU Node Labels
-First, let's verify that your DigitalOcean GPU node has the proper labels:
-
-```bash
-# Check GPU node labels
-kubectl get nodes -o json | jq '.items[0].metadata.labels | select(."nvidia.com/gpu")'
-
-# Expected output should show:
-# "nvidia.com/gpu": "1"
-# "doks.digitalocean.com/gpu-brand": "nvidia"
-# "doks.digitalocean.com/gpu-model": "h100"
-```
-
-### Install NVIDIA Device Plugin
-DigitalOcean GPU nodes need the NVIDIA device plugin to be installed manually:
+## Step 2: Install NVIDIA Device Plugin
 
 ```bash
 # Install NVIDIA device plugin
@@ -190,51 +124,87 @@ kubectl get pods -n kube-system | grep nvidia
 # Wait for GPU to become available (may take 30-60 seconds)
 sleep 30
 
-# Verify GPU is now available in allocatable resources
+# Verify GPU is now available
 kubectl get nodes -o json | jq '.items[0].status.allocatable | select(."nvidia.com/gpu")'
 ```
 
-### Expected Output After Installation:
-```json
-{
-  "cpu": "19850m",
-  "ephemeral-storage": "684705487353",
-  "hugepages-1Gi": "0",
-  "hugepages-2Mi": "0",
-  "memory": "241820054144",
-  "nvidia.com/gpu": "1",
-  "pods": "110"
-}
-```
+## Step 3: Install NVIDIA GPU Operator
 
-### Troubleshooting Common Issues
-
-**Issue**: Pods remain in `Pending` status with error `0/1 nodes are available: 1 Insufficient nvidia.com/gpu`
-
-**Solution**: The NVIDIA device plugin is not installed or not running properly.
+**Important**: DigitalOcean GPU nodes have a taint (`nvidia.com/gpu: NoSchedule`) that prevents general workloads from running on them. The GPU operator components need tolerations to run on these nodes.
 
 ```bash
-# Check if device plugin pod is running
-kubectl get pods -n kube-system | grep nvidia
+# Add NVIDIA Helm repository
+helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
+helm repo update
 
-# If not running, check pod events
-kubectl describe pod nvidia-device-plugin-daemonset-xxxxx -n kube-system
+# Install GPU operator with essential components and tolerations
+helm install gpu-operator nvidia/gpu-operator \
+  --namespace gpu-operator --create-namespace \
+  --set dcgmExporter.enabled=true \
+  --set gfd.enabled=true \
+  --set driver.enabled=false \
+  --set devicePlugin.enabled=false \
+  --set migManager.enabled=false \
+  --set operator.defaultRuntime=containerd \
+  --set dcgmExporter.tolerations[0].key=nvidia.com/gpu \
+  --set dcgmExporter.tolerations[0].operator=Exists \
+  --set dcgmExporter.tolerations[0].effect=NoSchedule \
+  --set gfd.tolerations[0].key=nvidia.com/gpu \
+  --set gfd.tolerations[0].operator=Exists \
+  --set gfd.tolerations[0].effect=NoSchedule
 
-# Reinstall if needed
-kubectl delete -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.15.0/deployments/static/nvidia-device-plugin.yml
-kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.15.0/deployments/static/nvidia-device-plugin.yml
+# Wait for GPU operator components to be ready
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=dcgm-exporter -n gpu-operator --timeout=300s
+
+# Verify GPU operator components are running
+kubectl get pods -n gpu-operator
 ```
 
-**Issue**: GPU operator installation times out or fails
+## Step 3.5: Add GPU Node Labels (Required for DCGM Exporter)
 
-**Solution**: For DigitalOcean, the full GPU operator is often not necessary. The device plugin alone is sufficient for most workloads.
+**Important**: DigitalOcean GPU nodes don't automatically have all the GPU feature labels that the GPU operator expects. We need to manually add these labels to enable DCGM Exporter.
 
 ```bash
-# Skip GPU operator installation and use device plugin only
-# The device plugin provides basic GPU support without the full operator stack
+# Get your GPU node name
+kubectl get nodes | grep h100
+
+# Add required GPU labels to the node
+kubectl label node h100-worker-pool-2aavk \
+  nvidia.com/cuda.present=true \
+  nvidia.com/gpu.count=1 \
+  nvidia.com/mig.strategy=single \
+  nvidia.com/gpu.product-name=NVIDIA-H100-80GB-PCIe \
+  nvidia.com/gpu.product-full-name=NVIDIA-H100-80GB-PCIe \
+  nvidia.com/gpu.memory=81920MiB \
+  nvidia.com/gpu.family=Hopper \
+  nvidia.com/gpu.pci.vendor=10de \
+  nvidia.com/gpu.pci.device=2700
+
+# Add NFD (Node Feature Discovery) labels
+kubectl label node h100-worker-pool-2aavk \
+  feature.node.kubernetes.io/pci-10de.present=true \
+  feature.node.kubernetes.io/gpu.count=1 \
+  feature.node.kubernetes.io/gpu.family=Hopper \
+  feature.node.kubernetes.io/gpu.memory=81920MiB
+
+# Verify labels were applied
+kubectl get nodes -l nvidia.com/gpu=1 --show-labels
+
+# Wait for GPU operator to detect the labels and create DCGM Exporter
+sleep 30
+
+# Verify DCGM Exporter is running
+kubectl get pods -n gpu-operator | grep dcgm
+
+# Fix service selector labels (if needed)
+kubectl label pod nvidia-dcgm-exporter-xxxxx app.kubernetes.io/name=dcgm-exporter -n gpu-operator
+
+# Test DCGM Exporter metrics
+kubectl port-forward service/nvidia-dcgm-exporter 9400:9400 -n gpu-operator &
+curl localhost:9400/metrics | head -10
 ```
 
-## Step 3: Deploy NVIDIA NIM (Optimized for H100)
+## Step 4: Deploy NVIDIA NIM (Optimized for H100)
 
 Deploy NVIDIA NIM using the official NGC Helm chart. We'll use Llama 3.1 8B which is a good starting point for testing.
 
@@ -252,18 +222,11 @@ Deploy NVIDIA NIM using the official NGC Helm chart. We'll use Llama 3.1 8B whic
 
 **Without a valid API key, the NIM deployment will fail with 401 Unauthorized errors.**
 
+
+
 ```bash
 # Load environment variables from .env file
 source .env
-
-# Set NGC API key (update .env file with your actual NGC API key)
-export NGC_CLI_API_KEY="${NVIDIA_API_KEY}"
-
-# Verify NGC API key is set
-if [ -z "$NGC_CLI_API_KEY" ]; then
-    echo "Error: NGC_CLI_API_KEY is not set in .env file"
-    exit 1
-fi
 
 # Create namespace for NIM
 kubectl create namespace ${NIM_NAMESPACE}
@@ -271,18 +234,18 @@ kubectl create namespace ${NIM_NAMESPACE}
 # Fetch NIM LLM Helm Chart
 helm fetch https://helm.ngc.nvidia.com/nim/charts/nim-llm-1.3.0.tgz \
   --username='$oauthtoken' \
-  --password=$NGC_CLI_API_KEY
+  --password=$NVIDIA_API_KEY
 
 # Configure Docker registry secret for nvcr.io
 kubectl create secret docker-registry registry-secret \
   --docker-server=nvcr.io \
   --docker-username='$oauthtoken' \
-  --docker-password=$NGC_CLI_API_KEY \
+  --docker-password=$NVIDIA_API_KEY \
   -n ${NIM_NAMESPACE}
 
-# Configure NGC API secret
+# Configure NGC API secret (note: pod expects NGC_API_KEY, not NGC_CLI_API_KEY)
 kubectl create secret generic ngc-api \
-  --from-literal=NGC_CLI_API_KEY=$NGC_CLI_API_KEY \
+  --from-literal=NGC_API_KEY=$NVIDIA_API_KEY \
   -n ${NIM_NAMESPACE}
 
 # Setup NIM Configuration for H100
@@ -306,80 +269,19 @@ helm install my-nim nim-llm-1.3.0.tgz \
 
 # Verify NIM pod is running
 kubectl get pods -n ${NIM_NAMESPACE}
+
 # Monitor pod startup (H100 models take longer to load)
 kubectl logs -f my-nim-nim-llm-0 -n ${NIM_NAMESPACE}
 ```
-
-## Step 4: Install Prometheus and Grafana for Monitoring
-
-Install the monitoring stack to observe GPU performance and NIM metrics.
-
-```bash
-# Add Prometheus community Helm repository
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo update
-
-# Load environment variables from .env file
-source .env
-
-# Install Prometheus stack
-helm install prometheus-stack prometheus-community/kube-prometheus-stack \
-  --namespace ${MONITORING_NAMESPACE} --create-namespace
 ```
 
-## Step 5: Configure Prometheus to Scrape DCGM Metrics
 
-Configure Prometheus to collect GPU metrics from the DCGM Exporter.
 
-```bash
-# Create ServiceMonitor for DCGM Exporter
-cat <<EOF | kubectl apply -f -
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: nvidia-dcgm-exporter
-  namespace: monitoring
-  labels:
-    prometheus: prometheus-stack
-spec:
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: dcgm-exporter
-  endpoints:
-  - port: metrics
-    interval: 15s
-EOF
 
-# Verify DCGM Exporter is running
-kubectl get pods -n gpu-operator | grep dcgm-exporter
 
-# Test metrics endpoint
-kubectl port-forward -n gpu-operator svc/nvidia-dcgm-exporter 9400:9400 &
-curl localhost:9400/metrics | head -20
-```
 
-## Step 6: Access Grafana and Import GPU Dashboard
 
-Set up Grafana to visualize GPU metrics and NIM performance.
-
-```bash
-# Get Grafana admin password
-kubectl get secret prometheus-stack-grafana -n monitoring -o jsonpath="{.data.admin-password}" | base64 --decode
-
-# Port-forward Grafana service
-kubectl port-forward -n monitoring svc/prometheus-stack-grafana 3000:80 &
-```
-
-1. Open your browser and navigate to `http://localhost:3000`
-2. Log in with username `admin` and the password from above
-3. Go to Dashboards → Import
-4. Enter dashboard ID: `12239` (NVIDIA DCGM Exporter dashboard)
-5. Select Prometheus as data source
-6. Click Import
-
-## Step 7: Test NIM API and Monitor Performance
-
-Test the NIM deployment while monitoring GPU usage in Grafana.
+## Step 5: Test NIM API
 
 ```bash
 # Load environment variables from .env file
@@ -391,7 +293,7 @@ kubectl port-forward service/my-nim-nim-llm 8000:8000 -n ${NIM_NAMESPACE} &
 # Wait a moment for port forwarding to establish
 sleep 5
 
-# Test NIM API with a complex prompt to showcase H100 capabilities
+# Test NIM API
 curl -X 'POST' \
   'http://localhost:8000/v1/chat/completions' \
   -H 'accept: application/json' \
@@ -399,226 +301,136 @@ curl -X 'POST' \
   -d '{
     "messages": [
       {
-        "content": "You are a knowledgeable AI assistant with expertise in machine learning and GPU computing.",
-        "role": "system"
-      },
-      {
-        "content": "Explain the differences between transformer architectures and how they impact model performance. Provide a detailed technical analysis.",
+        "content": "Hello, how are you?",
         "role": "user"
       }
     ],
     "model": "meta/llama3-8b-instruct",
-    "max_tokens": 500,
-    "top_p": 1,
-    "n": 1,
-    "stream": false,
-    "temperature": 0.7,
-    "frequency_penalty": 0.0
+    "max_tokens": 50,
+    "temperature": 0.7
   }'
 ```
 
-While the API call is running, observe in Grafana:
-- **GPU utilization** (should see moderate usage with 8B model)
-- **VRAM usage** (expect ~8-12GB usage for Llama 3.1 8B)
-- **Temperature** (H100 can handle up to 83°C)
-- **Power consumption** (H100 can draw up to 700W)
-- **Memory bandwidth** (H100 has 3.35 TB/s bandwidth)
-- **Inference latency** (should be very fast with H100 for 8B model)
 
-## Step 8: Advanced Monitoring Setup
 
-### Monitor NIM Application Metrics
+## Step 6: Cost Optimization
 
-Create custom ServiceMonitor for NIM application metrics:
+Since your H100 cluster costs $3.39/hour (~$2,500/month if running 24/7):
 
 ```bash
-cat <<EOF | kubectl apply -f -
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: nim-application
-  namespace: monitoring
-  labels:
-    prometheus: prometheus-stack
-spec:
-  selector:
-    matchLabels:
-      app: my-nim-nim-llm
-  endpoints:
-  - port: 8000
-    interval: 30s
-    path: /metrics
-EOF
-```
-
-### Set up Alerts for GPU Issues
-
-```bash
-# Create alert rules for GPU monitoring
-cat <<EOF | kubectl apply -f -
-apiVersion: monitoring.coreos.com/v1
-kind: PrometheusRule
-metadata:
-  name: gpu-alerts
-  namespace: monitoring
-  labels:
-    prometheus: prometheus-stack
-spec:
-  groups:
-  - name: gpu.rules
-    rules:
-    - alert: HighGPUTemperature
-      expr: DCGM_FI_DEV_GPU_TEMP > 85  # H100 can handle higher temps
-      for: 5m
-      labels:
-        severity: warning
-      annotations:
-        summary: "H100 GPU temperature is high"
-        description: "H100 GPU temperature is {{ \$value }}°C"
-    - alert: HighGPUUtilization
-      expr: DCGM_FI_DEV_GPU_UTIL > 95
-      for: 10m
-      labels:
-        severity: info
-      annotations:
-        summary: "H100 GPU utilization is very high"
-        description: "H100 GPU utilization is {{ \$value }}%"
-    - alert: HighVRAMUsage
-      expr: DCGM_FI_DEV_FB_USED / DCGM_FI_DEV_FB_TOTAL > 0.9
-      for: 5m
-      labels:
-        severity: warning
-      annotations:
-        summary: "H100 VRAM usage is very high"
-        description: "H100 VRAM usage is {{ \$value | humanizePercentage }}"
-EOF
-```
-
-## Step 9: Cost Optimization Tips
-
-Since your H100 cluster costs $3.39/hour (~$2,500/month if running 24/7), here are some cost optimization strategies:
-
-### Scale Down When Not in Use
-```bash
-# Scale down NIM statefulset to 0 replicas when not needed
+# Scale down when not in use
 kubectl scale statefulset my-nim-nim-llm --replicas=0 -n ${NIM_NAMESPACE}
 
 # Scale back up when needed
 kubectl scale statefulset my-nim-nim-llm --replicas=1 -n ${NIM_NAMESPACE}
-```
 
-### Use Horizontal Pod Autoscaler (HPA)
-```bash
-# Install metrics-server if not already installed
-kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-
-# Create HPA for NIM statefulset
-kubectl autoscale statefulset my-nim-nim-llm --cpu-percent=50 --min=0 --max=1 -n ${NIM_NAMESPACE}
-```
-
-### Monitor Costs
-```bash
-# Check current resource usage
+# Check resource usage
 kubectl top nodes
 kubectl top pods -n nim
-
-# Monitor GPU utilization
-kubectl exec -n gpu-operator deployment/nvidia-dcgm-exporter -- nvidia-smi
 ```
 
-### Schedule Workloads
-Consider using Kubernetes CronJobs for batch processing during off-peak hours to optimize costs.
-
-## Step 10: Cleanup
+## Step 7: Cleanup
 
 **Important**: Your H100 cluster costs $3.39/hour. To avoid unexpected charges:
 
-### Option 1: Scale Down (Recommended for temporary pause)
 ```bash
-# Scale down all workloads
+# Scale down (recommended for temporary pause)
 kubectl scale statefulset my-nim-nim-llm --replicas=0 -n ${NIM_NAMESPACE}
-kubectl scale deployment prometheus-stack-grafana --replicas=0 -n monitoring
-kubectl scale deployment prometheus-stack-prometheus --replicas=0 -n monitoring
 
-# The cluster will still cost $3.39/hour but with minimal resource usage
-```
-
-### Option 2: Delete Cluster (Only if you're completely done)
-```bash
-# WARNING: This will delete your entire cluster and all data
+# Delete cluster (WARNING: deletes all data)
 doctl kubernetes cluster delete ${CLUSTER_NAME}
 ```
 
-## Issues Encountered and Solutions
+## Troubleshooting
 
-### Problem 1: GPU Not Available in Kubernetes
-**Issue**: Pods remained in `Pending` status with error `0/1 nodes are available: 1 Insufficient nvidia.com/gpu`
+### Common Issues
 
-**Root Cause**: DigitalOcean GPU nodes have GPU labels but don't automatically expose GPU resources to Kubernetes. The NVIDIA device plugin must be installed manually.
+**ImagePullBackOff**: Authentication failure when pulling from `nvcr.io`
+```bash
+# Recreate secrets with correct variable names
+source .env
+kubectl delete secret registry-secret ngc-api -n ${NIM_NAMESPACE}
+kubectl create secret docker-registry registry-secret \
+  --docker-server=nvcr.io \
+  --docker-username='$oauthtoken' \
+  --docker-password=$NVIDIA_API_KEY \
+  -n ${NIM_NAMESPACE}
+kubectl create secret generic ngc-api \
+  --from-literal=NGC_API_KEY=$NVIDIA_API_KEY \
+  -n ${NIM_NAMESPACE}
+kubectl delete pod my-nim-nim-llm-0 -n ${NIM_NAMESPACE}
+```
 
-**Solution**: Install the NVIDIA device plugin:
+**GPU Not Available**: Install NVIDIA device plugin
 ```bash
 kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.15.0/deployments/static/nvidia-device-plugin.yml
 ```
 
-### Problem 2: GPU Operator Installation Timeout
-**Issue**: GPU operator installation timed out or failed with context deadline exceeded
+**GPU Operator Pods Pending**: DigitalOcean GPU nodes have taints that prevent general workloads
+```bash
+# Reinstall with proper tolerations
+helm uninstall gpu-operator -n gpu-operator
+helm install gpu-operator nvidia/gpu-operator \
+  --namespace gpu-operator --create-namespace \
+  --set dcgmExporter.enabled=true \
+  --set gfd.enabled=true \
+  --set driver.enabled=false \
+  --set devicePlugin.enabled=false \
+  --set migManager.enabled=false \
+  --set operator.defaultRuntime=containerd \
+  --set dcgmExporter.tolerations[0].key=nvidia.com/gpu \
+  --set dcgmExporter.tolerations[0].operator=Exists \
+  --set dcgmExporter.tolerations[0].effect=NoSchedule \
+  --set gfd.tolerations[0].key=nvidia.com/gpu \
+  --set gfd.tolerations[0].operator=Exists \
+  --set gfd.tolerations[0].effect=NoSchedule
+```
 
-**Root Cause**: The full NVIDIA GPU operator is complex and may not be necessary for basic GPU workloads on DigitalOcean.
+**DCGM Exporter Not Created**: GPU operator doesn't recognize DigitalOcean GPU nodes
+```bash
+# Add required GPU labels to the node
+kubectl label node h100-worker-pool-2aavk \
+  nvidia.com/cuda.present=true \
+  nvidia.com/gpu.count=1 \
+  nvidia.com/mig.strategy=single \
+  nvidia.com/gpu.product-name=NVIDIA-H100-80GB-PCIe \
+  nvidia.com/gpu.product-full-name=NVIDIA-H100-80GB-PCIe \
+  nvidia.com/gpu.memory=81920MiB \
+  nvidia.com/gpu.family=Hopper \
+  nvidia.com/gpu.pci.vendor=10de \
+  nvidia.com/gpu.pci.device=2700
 
-**Solution**: Use the device plugin only, which provides sufficient GPU support without the full operator stack.
+# Add NFD labels
+kubectl label node h100-worker-pool-2aavk \
+  feature.node.kubernetes.io/pci-10de.present=true \
+  feature.node.kubernetes.io/gpu.count=1 \
+  feature.node.kubernetes.io/gpu.family=Hopper \
+  feature.node.kubernetes.io/gpu.memory=81920MiB
+```
 
-### Problem 3: Persistent Volume Issues
-**Issue**: Pods failed with `pod has unbound immediate PersistentVolumeClaims`
+**DCGM Exporter Service Not Working**: Service selector doesn't match pod labels
+```bash
+# Add missing label to DCGM Exporter pod
+kubectl label pod nvidia-dcgm-exporter-xxxxx app.kubernetes.io/name=dcgm-exporter -n gpu-operator
 
-**Root Cause**: NIM requires persistent storage but no storage class was specified.
+# Verify service has endpoints
+kubectl get endpoints nvidia-dcgm-exporter -n gpu-operator
+```
 
-**Solution**: Add `storageClass: "do-block-storage"` to the NIM configuration.
 
-### Problem 4: Model Selection
-**Issue**: Initially tried to use Llama 3.1 70B which may be too large for initial testing
 
-**Solution**: Start with Llama 3.1 8B for testing, then upgrade to larger models once everything is working.
+## Summary
 
-### Problem 5: NGC API Key Authentication
-**Issue**: Pod crashes with `401 Unauthorized` error and `CrashLoopBackOff` status
-
-**Root Cause**: Missing or invalid NVIDIA NGC API key in the `.env` file
-
-**Solution**: 
-1. Get a valid NGC API key from [NVIDIA NGC](https://ngc.nvidia.com/)
-2. Update `.env` file: `NVIDIA_API_KEY=your-actual-api-key-here`
-3. Recreate the secret: `kubectl create secret generic ngc-api --from-literal=NGC_API_KEY=$NVIDIA_API_KEY -n nim`
-4. Restart the pod: `kubectl delete pod my-nim-nim-llm-0 -n nim`
-
-## Lab Objectives Achieved
-
-This lab successfully demonstrates:
-
-1. **GPU Cluster Management**: Creating and managing GPU-enabled Kubernetes clusters on DigitalOcean
-2. **NVIDIA Device Plugin Setup**: Installing and configuring GPU support for DigitalOcean nodes
-3. **NVIDIA NIM Deployment**: Deploying AI models using NIM with proper resource allocation
-4. **Monitoring & Observability**: Setting up comprehensive GPU monitoring with Prometheus and Grafana
-5. **MLOps Best Practices**: Using Helm for reproducible deployments and Kubernetes for scaling
-6. **Performance Analysis**: Monitoring GPU utilization, memory usage, and application performance
-7. **Troubleshooting**: Identifying and resolving common GPU deployment issues
-
-## Key Advantages of DigitalOcean H100 Approach
-
-- ✅ **High-Performance GPU**: H100 with 80GB VRAM for large models
-- ✅ **Predictable Pricing**: $3.39/hour (~$2,500/month for 24/7 usage)
-- ✅ **No GPU quota restrictions**: Unlike other cloud providers
-- ✅ **Immediate GPU access**: After approval process
-- ✅ **Comprehensive monitoring**: Full GPU metrics and application monitoring
-- ✅ **Easy scaling**: Kubernetes-native scaling and resource management
-- ✅ **Cost optimization**: Scale down when not in use to save costs
+This lab demonstrates deploying NVIDIA NIM on DigitalOcean H100 GPU clusters with:
+- **GPU Cluster Management**: H100 with 80GB VRAM for large models
+- **NVIDIA NIM Deployment**: Llama 3.1 8B with proper authentication
+- **GPU Monitoring**: DCGM Exporter providing real-time GPU metrics
+- **Cost**: $3.39/hour (~$2,500/month for 24/7 usage)
+- **Scaling**: Kubernetes-native scaling and resource management
 
 ## Next Steps
 
-1. **Optimize for H100**: Experiment with larger models (Llama 3.1 405B, Mixtral 8x22B)
-2. **Implement auto-scaling**: Use HPA and VPA for dynamic resource allocation
-3. **Add more models**: Deploy multiple NIM models for different use cases
-4. **Set up CI/CD**: Automate model deployment and updates
-5. **Production hardening**: Implement security policies, network policies, and backup strategies
-6. **Cost monitoring**: Set up billing alerts and usage tracking
-7. **Batch processing**: Use CronJobs for scheduled model training/inference
+- Experiment with larger models (Llama 3.1 405B, Mixtral 8x22B)
+- Implement auto-scaling with HPA
+- Deploy multiple NIM models for different use cases
+- Set up CI/CD for automated deployments
