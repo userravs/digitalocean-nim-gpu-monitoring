@@ -95,6 +95,8 @@ This script:
 - Waits for Prometheus to restart
 - Verifies the configuration
 
+**Note**: The default DCGM Exporter configuration provides basic GPU metrics. For advanced metrics like Tensor Core utilization, additional DCGM profiling configuration would be required.
+
 ## Configuration
 
 ### Prometheus Configuration
