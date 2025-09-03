@@ -6,7 +6,7 @@
 set -e
 
 # Configuration
-NIM_URL="http://localhost:8000"
+NIM_URL="http://localhost:8080"
 
 # Check for help before setting variables
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then

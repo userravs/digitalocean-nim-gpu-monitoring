@@ -45,7 +45,7 @@ sleep 2
 
 # Start NIM API
 echo "🤖 Starting NIM API port forwarding..."
-kubectl port-forward service/nim-service 8080:8080 -n nim > /dev/null 2>&1 &
+kubectl port-forward service/my-nim-nim-llm 8080:8000 -n nim > /dev/null 2>&1 &
 NIM_PID=$!
 sleep 2
 
