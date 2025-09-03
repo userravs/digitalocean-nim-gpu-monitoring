@@ -318,6 +318,10 @@ rate(DCGM_FI_DEV_POWER_USAGE[5m])
 
 ### Creating Custom NIM Dashboards
 
+**For comprehensive custom dashboard creation, see [Custom Dashboard Guide](custom-dashboard-guide.md)**
+
+**Quick Panel Examples:**
+
 **GPU Utilization Panel:**
 ```promql
 DCGM_FI_DEV_GPU_UTIL{gpu="0"}
@@ -337,6 +341,11 @@ DCGM_FI_DEV_GPU_TEMP{gpu="0"}
 ```promql
 DCGM_FI_DEV_POWER_USAGE{gpu="0"}
 ```
+
+**Import Ready Dashboard:**
+- **File**: `dashboards/h100-nim-dashboard.json`
+- **Features**: H100-optimized panels, NIM application monitoring, modern TimeSeries panels
+- **Import**: Dashboards → Import → Upload JSON file
 
 ### Dashboard Variables
 
