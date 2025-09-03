@@ -24,6 +24,189 @@ This lab guides you through deploying NVIDIA NIM on DigitalOcean Kubernetes (DOK
 - DigitalOcean GPU nodes with `nvidia.com/gpu=1` label
 - **Note**: GPU nodes have taints that may affect monitoring deployments
 
+## Cluster Architecture Overview
+
+```mermaid
+graph TB
+    %% External Components
+    subgraph "External Services"
+        NGC[NGC Container Registry]
+        DO_API[DigitalOcean API]
+        USER[User/Developer]
+    end
+
+    %% DigitalOcean Infrastructure
+    subgraph "DigitalOcean Cloud"
+        subgraph "Kubernetes Cluster (DOKS)"
+            subgraph "Control Plane"
+                CP[Control Plane<br/>API Server, etcd, etc.]
+            end
+
+            subgraph "GPU Node Pool"
+                subgraph "H100 GPU Node"
+                    GPU_HW[NVIDIA H100 GPU<br/>80GB HBM3]
+                    GPU_DRIVER[NVIDIA Driver<br/>550.163.01]
+                    KUBELET[Kubelet<br/>Container Runtime]
+                end
+            end
+
+            subgraph "Namespaces & Components"
+                subgraph "kube-system"
+                    NODE_EXPORTER[Node Exporter<br/>System Metrics]
+                end
+
+                subgraph "gpu-monitoring"
+                    DCGM[DCGM Exporter<br/>GPU Telemetry]
+                    DCGM_SVC[DCGM Service<br/>:9400]
+                end
+
+                subgraph "prometheus"
+                    PROM[Prometheus<br/>Time Series DB]
+                    GRAFANA[Grafana<br/>Dashboards]
+                    ALERTMANAGER[Alert Manager<br/>Alerts]
+                    NODE_EXP[Node Exporter<br/>System Metrics]
+                end
+
+                subgraph "nim"
+                    NIM_POD[NIM Pod<br/>LLM Inference]
+                    NIM_SVC[NIM Service<br/>:8080]
+                    NGC_SECRET[NGC API Key<br/>Secret]
+                end
+            end
+        end
+    end
+
+    %% Data Flow
+    USER -->|kubectl/doctl| DO_API
+    DO_API -->|Cluster Management| CP
+    CP -->|Schedule Pods| GPU_HW
+    
+    %% GPU Monitoring Flow
+    GPU_HW -->|GPU Metrics| GPU_DRIVER
+    GPU_DRIVER -->|DCGM API| DCGM
+    DCGM -->|Prometheus Metrics| DCGM_SVC
+    DCGM_SVC -->|Scrape| PROM
+    PROM -->|Query| GRAFANA
+    GRAFANA -->|Visualize| USER
+
+    %% NIM Application Flow
+    NGC -->|Pull Images| NIM_POD
+    NGC_SECRET -->|Authentication| NIM_POD
+    NIM_POD -->|LLM Inference| GPU_HW
+    NIM_POD -->|API Endpoints| NIM_SVC
+    NIM_SVC -->|HTTP Requests| USER
+
+    %% System Monitoring
+    GPU_HW -->|System Metrics| NODE_EXPORTER
+    NODE_EXPORTER -->|Node Metrics| PROM
+
+    %% Styling
+    classDef gpuNode fill:#ff9999,stroke:#333,stroke-width:2px
+    classDef monitoring fill:#99ccff,stroke:#333,stroke-width:2px
+    classDef application fill:#99ff99,stroke:#333,stroke-width:2px
+    classDef external fill:#ffcc99,stroke:#333,stroke-width:2px
+
+    class GPU_HW,GPU_DRIVER,KUBELET gpuNode
+    class DCGM,DCGM_SVC,PROM,GRAFANA,ALERTMANAGER,NODE_EXP monitoring
+    class NIM_POD,NIM_SVC,NGC_SECRET application
+    class NGC,DO_API,USER external
+```
+
+### Architecture Components
+
+**🏗️ Infrastructure Layer:**
+- **DigitalOcean Kubernetes (DOKS)**: Managed Kubernetes cluster
+- **H100 GPU Node Pool**: NVIDIA H100 80GB HBM3 GPUs
+- **Control Plane**: Managed by DigitalOcean
+
+**🔧 GPU Support Layer:**
+- **NVIDIA Device Plugin**: Enables GPU resource scheduling
+- **NVIDIA Driver**: 550.163.01 (pre-installed on GPU nodes)
+- **DCGM Exporter**: GPU telemetry collection
+
+**📊 Monitoring Stack:**
+- **Prometheus**: Time-series metrics database
+- **Grafana**: Visualization and dashboards
+- **Alert Manager**: Alerting and notifications
+- **Node Exporter**: System-level metrics
+
+**🤖 Application Layer:**
+- **NVIDIA NIM**: LLM inference engine
+- **NGC Registry**: Container image source
+- **API Services**: HTTP endpoints for inference
+
+**🔐 Security Layer:**
+- **NGC API Key**: Authentication for container registry
+- **Kubernetes Secrets**: Secure credential storage
+- **Network Policies**: Traffic control (optional)
+
+### Data Flow
+
+1. **Cluster Management**: User → DigitalOcean API → Kubernetes Control Plane
+2. **GPU Monitoring**: H100 GPU → DCGM Exporter → Prometheus → Grafana
+3. **Application Deployment**: NGC Registry → NIM Pod → GPU Resources
+4. **Inference Requests**: User → NIM Service → GPU → Response
+5. **System Monitoring**: Node → Node Exporter → Prometheus → Dashboards
+
+### Network Connectivity & Ports
+
+```mermaid
+graph LR
+    subgraph "External Access"
+        USER[User/Developer]
+    end
+
+    subgraph "DigitalOcean Cluster"
+        subgraph "Load Balancer"
+            LB[DigitalOcean Load Balancer]
+        end
+
+        subgraph "H100 GPU Node"
+            subgraph "NIM Application"
+                NIM[8080: NIM API]
+            end
+
+            subgraph "Monitoring Stack"
+                PROM[30090: Prometheus]
+                GRAFANA[32322: Grafana]
+                DCGM[9400: DCGM Exporter]
+            end
+        end
+    end
+
+    USER -->|HTTP/HTTPS| LB
+    LB -->|Port Forward| NIM
+    LB -->|Port Forward| PROM
+    LB -->|Port Forward| GRAFANA
+    LB -->|Port Forward| DCGM
+
+    %% Internal communication
+    PROM -.->|Scrape| DCGM
+    GRAFANA -.->|Query| PROM
+
+    %% Styling
+    classDef external fill:#ffcc99,stroke:#333,stroke-width:2px
+    classDef app fill:#99ff99,stroke:#333,stroke-width:2px
+    classDef monitoring fill:#99ccff,stroke:#333,stroke-width:2px
+    classDef infra fill:#cccccc,stroke:#333,stroke-width:2px
+
+    class USER external
+    class NIM app
+    class PROM,GRAFANA,DCGM monitoring
+    class LB infra
+```
+
+**Port Configuration:**
+- **NIM API**: `8080` (internal), Load Balancer (external)
+- **Prometheus**: `30090` (NodePort), `9090` (internal)
+- **Grafana**: `32322` (NodePort), `3000` (internal)
+- **DCGM Exporter**: `9400` (internal, scraped by Prometheus)
+
+**Access Methods:**
+- **Port Forwarding**: `kubectl port-forward` (development)
+- **NodePort Services**: Direct cluster access (production)
+- **Load Balancer**: External access (optional)
+
 ## Prerequisites
 
 - DigitalOcean account with billing enabled
