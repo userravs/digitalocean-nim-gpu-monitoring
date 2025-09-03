@@ -58,27 +58,11 @@ This lab uses a `.env` file to manage configuration variables. A template `.env.
 cp .env.example .env
 
 # Edit the .env file with your configuration
-nano .env
-
-# Or use your preferred editor
-# vim .env
-# code .env
+vi .env
 ```
 
 **Important**: Make sure to update the `NVIDIA_API_KEY` in the `.env` file with your actual NVIDIA API key before proceeding.
 
-### Verify NGC API Key
-
-Before starting the lab, verify your NGC API key is valid:
-
-```bash
-# Test NGC API key authentication
-curl -H "Authorization: Bearer YOUR_NGC_API_KEY" \
-  https://api.ngc.nvidia.com/v2/models/nim/meta/llama3-8b-instruct
-
-# If successful, you'll get a JSON response with model details
-# If failed, you'll get a 401 error - update your API key
-```
 
 ## Step 1: Create DigitalOcean H100 Cluster
 
