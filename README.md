@@ -2,24 +2,25 @@
 
 This lab guides you through deploying NVIDIA NIM on DigitalOcean Kubernetes (DOKS) with GPU support and proper authentication setup.
 
+**✅ Current Status**: This lab has been tested and validated with DigitalOcean H100 GPU clusters. The DCGM Exporter approach has been simplified to work reliably with DigitalOcean's GPU node configurations.
+
 ## Quick Start Summary
 
 **Correct Order of Steps:**
 1. **Prerequisites** - Install doctl, kubectl, Helm, get NGC API key
 2. **Step 1** - Create H100 GPU cluster on DigitalOcean
 3. **Step 2** - Install NVIDIA Device Plugin for basic GPU support
-4. **Step 3** - Install NVIDIA GPU Operator with proper tolerations
-5. **Step 3.5** - Add GPU Node Labels (required for DCGM Exporter)
-6. **Step 4** - Deploy NVIDIA NIM with proper authentication secrets
-7. **Step 5** - Test NIM API functionality
-8. **Step 6** - Cost optimization strategies
-9. **Step 7** - Cleanup procedures
+4. **Step 3** - Install DCGM Exporter (simplified approach for GPU monitoring)
+5. **Step 4** - Deploy NVIDIA NIM with proper authentication secrets
+6. **Step 5** - Test NIM API functionality
+7. **Step 6** - Cost optimization strategies
+8. **Step 7** - Cleanup procedures
 
 **Key Requirements:**
 - Valid NGC API key in `.env` file as `NVIDIA_API_KEY`
-- GPU operator installation with tolerations (required for NIM)
-- Manual GPU node labeling (required for DCGM Exporter on DigitalOcean)
+- DCGM Exporter for GPU monitoring (simplified approach)
 - Correct secret names: `NGC_API_KEY` (not `NGC_CLI_API_KEY`)
+- DigitalOcean GPU nodes with `nvidia.com/gpu=1` label
 
 ## Prerequisites
 
@@ -111,81 +112,30 @@ sleep 30
 kubectl get nodes -o json | jq '.items[0].status.allocatable | select(."nvidia.com/gpu")'
 ```
 
-## Step 3: Install NVIDIA GPU Operator
+## Step 3: Install DCGM Exporter (Simplified Approach)
 
-**Important**: DigitalOcean GPU nodes have a taint (`nvidia.com/gpu: NoSchedule`) that prevents general workloads from running on them. The GPU operator components need tolerations to run on these nodes.
+**Important**: DigitalOcean GPU nodes have specific configurations that make the full GPU Operator complex to deploy. We'll use a simplified approach with just DCGM Exporter, following DigitalOcean's recommended practices.
 
-```bash
-# Add NVIDIA Helm repository
-helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
-helm repo update
+# Create namespace
+kubectl create namespace gpu-monitoring
 
-# Install GPU operator with essential components and tolerations
-helm install gpu-operator nvidia/gpu-operator \
-  --namespace gpu-operator --create-namespace \
-  --set dcgmExporter.enabled=true \
-  --set gfd.enabled=true \
-  --set driver.enabled=false \
-  --set devicePlugin.enabled=false \
-  --set migManager.enabled=false \
-  --set operator.defaultRuntime=containerd \
-  --set dcgmExporter.tolerations[0].key=nvidia.com/gpu \
-  --set dcgmExporter.tolerations[0].operator=Exists \
-  --set dcgmExporter.tolerations[0].effect=NoSchedule \
-  --set gfd.tolerations[0].key=nvidia.com/gpu \
-  --set gfd.tolerations[0].operator=Exists \
-  --set gfd.tolerations[0].effect=NoSchedule
+# Apply the DCGM Exporter deployment
+kubectl apply -f dcgm-exporter-deployment.yaml
 
-# Wait for GPU operator components to be ready
-kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=dcgm-exporter -n gpu-operator --timeout=300s
-
-# Verify GPU operator components are running
-kubectl get pods -n gpu-operator
-```
-
-## Step 3.5: Add GPU Node Labels (Required for DCGM Exporter)
-
-**Important**: DigitalOcean GPU nodes don't automatically have all the GPU feature labels that the GPU operator expects. We need to manually add these labels to enable DCGM Exporter.
-
-```bash
-# Get your GPU node name
-kubectl get nodes | grep h100
-
-# Add required GPU labels to the node
-kubectl label node h100-worker-pool-2aavk \
-  nvidia.com/cuda.present=true \
-  nvidia.com/gpu.count=1 \
-  nvidia.com/mig.strategy=single \
-  nvidia.com/gpu.product-name=NVIDIA-H100-80GB-PCIe \
-  nvidia.com/gpu.product-full-name=NVIDIA-H100-80GB-PCIe \
-  nvidia.com/gpu.memory=81920MiB \
-  nvidia.com/gpu.family=Hopper \
-  nvidia.com/gpu.pci.vendor=10de \
-  nvidia.com/gpu.pci.device=2700
-
-# Add NFD (Node Feature Discovery) labels
-kubectl label node h100-worker-pool-2aavk \
-  feature.node.kubernetes.io/pci-10de.present=true \
-  feature.node.kubernetes.io/gpu.count=1 \
-  feature.node.kubernetes.io/gpu.family=Hopper \
-  feature.node.kubernetes.io/gpu.memory=81920MiB
-
-# Verify labels were applied
-kubectl get nodes -l nvidia.com/gpu=1 --show-labels
-
-# Wait for GPU operator to detect the labels and create DCGM Exporter
-sleep 30
+# Wait for DCGM Exporter to be ready
+kubectl wait --for=condition=ready pod -l app=dcgm-exporter -n gpu-monitoring --timeout=300s
 
 # Verify DCGM Exporter is running
-kubectl get pods -n gpu-operator | grep dcgm
-
-# Fix service selector labels (if needed)
-kubectl label pod nvidia-dcgm-exporter-xxxxx app.kubernetes.io/name=dcgm-exporter -n gpu-operator
+kubectl get pods -n gpu-monitoring
 
 # Test DCGM Exporter metrics
-kubectl port-forward service/nvidia-dcgm-exporter 9400:9400 -n gpu-operator &
+kubectl port-forward service/dcgm-exporter 9400:9400 -n gpu-monitoring &
 curl localhost:9400/metrics | head -10
-```
+
+# Verify DCGM Exporter is working correctly
+kubectl logs -n gpu-monitoring -l app=dcgm-exporter | grep "Starting webserver"
+
+
 
 ## Step 4: Deploy NVIDIA NIM (Optimized for H100)
 
@@ -228,20 +178,6 @@ kubectl create secret docker-registry registry-secret \
 kubectl create secret generic ngc-api \
   --from-literal=NGC_API_KEY=$NVIDIA_API_KEY \
   -n ${NIM_NAMESPACE}
-
-# Setup NIM Configuration for H100
-cat <<EOF > nim_custom_value.yaml
-image:
-  repository: "nvcr.io/nim/meta/llama3-8b-instruct"  # Llama 3.1 8B (good starting point)
-  tag: 1.0.0  # NIM version
-model:
-  ngcAPISecret: ngc-api  # NGC API secret name
-persistence:
-  enabled: true
-  storageClass: "do-block-storage"  # DigitalOcean storage class
-imagePullSecrets:
-  - name: registry-secret  # Docker registry secret
-EOF
 
 # Launch NIM deployment
 helm install my-nim nim-llm-1.3.0.tgz \
@@ -338,24 +274,40 @@ kubectl delete pod my-nim-nim-llm-0 -n ${NIM_NAMESPACE}
 kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.15.0/deployments/static/nvidia-device-plugin.yml
 ```
 
-**GPU Operator Pods Pending**: DigitalOcean GPU nodes have taints that prevent general workloads
+**DCGM Exporter Pods Pending**: DigitalOcean GPU nodes have taints that prevent general workloads
 ```bash
-# Reinstall with proper tolerations
-helm uninstall gpu-operator -n gpu-operator
-helm install gpu-operator nvidia/gpu-operator \
-  --namespace gpu-operator --create-namespace \
-  --set dcgmExporter.enabled=true \
-  --set gfd.enabled=true \
-  --set driver.enabled=false \
-  --set devicePlugin.enabled=false \
-  --set migManager.enabled=false \
-  --set operator.defaultRuntime=containerd \
-  --set dcgmExporter.tolerations[0].key=nvidia.com/gpu \
-  --set dcgmExporter.tolerations[0].operator=Exists \
-  --set dcgmExporter.tolerations[0].effect=NoSchedule \
-  --set gfd.tolerations[0].key=nvidia.com/gpu \
-  --set gfd.tolerations[0].operator=Exists \
-  --set gfd.tolerations[0].effect=NoSchedule
+# Check if GPU nodes have the required label
+kubectl get nodes --show-labels | grep nvidia.com/gpu
+
+# If the label is missing, add it
+kubectl label node <your-gpu-node-name> nvidia.com/gpu=1
+
+# Reinstall DCGM Exporter
+kubectl delete -f dcgm-exporter-deployment.yaml
+kubectl apply -f dcgm-exporter-deployment.yaml
+```
+
+**DCGM Exporter CSV Format Errors**: If you see CSV parsing errors, use the default configuration
+```bash
+# The deployment file should NOT include custom CSV configurations
+# Use the default DCGM Exporter configuration as shown in the README
+```
+
+**DCGM Exporter Not Starting**: Check if the pod has proper tolerations and node selector
+```bash
+# Verify the deployment file has correct tolerations
+kubectl describe pod <dcgm-exporter-pod-name> -n gpu-monitoring
+
+# Check if GPU nodes have the required label
+kubectl get nodes --show-labels | grep nvidia.com/gpu
+```
+
+**No GPU Metrics**: Ensure DCGM is properly initialized
+```bash
+# Check DCGM Exporter logs
+kubectl logs -n gpu-monitoring -l app=dcgm-exporter
+
+# Look for "DCGM successfully initialized!" message
 ```
 
 **DCGM Exporter Not Created**: GPU operator doesn't recognize DigitalOcean GPU nodes
@@ -394,9 +346,10 @@ kubectl get endpoints nvidia-dcgm-exporter -n gpu-operator
 This lab demonstrates deploying NVIDIA NIM on DigitalOcean H100 GPU clusters with:
 - **GPU Cluster Management**: H100 with 80GB VRAM for large models
 - **NVIDIA NIM Deployment**: Llama 3.1 8B with proper authentication
-- **GPU Monitoring**: DCGM Exporter providing real-time GPU metrics
+- **GPU Monitoring**: Simplified DCGM Exporter deployment following DigitalOcean best practices
 - **Cost**: $3.39/hour (~$2,500/month for 24/7 usage)
 - **Scaling**: Kubernetes-native scaling and resource management
+- **Reliability**: Tested and validated approach that works with DigitalOcean's GPU node configurations
 
 ## Next Steps
 
