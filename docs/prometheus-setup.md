@@ -170,6 +170,8 @@ kill $PF_PID
 
 You should see DCGM Exporter endpoints being scraped by the `gpu-metrics` job.
 
+**Note**: If GPU metrics are not showing up, the additional scrape configuration may need to be applied manually. See the troubleshooting section below.
+
 ## Using Grafana
 
 **For comprehensive Grafana setup and configuration, see [docs/grafana-setup.md](grafana-setup.md)**
@@ -278,6 +280,24 @@ pkill -f "kubectl port-forward"
 # Check if ports are in use
 lsof -i :3000  # Grafana
 lsof -i :9090  # Prometheus
+```
+
+### 5. GPU Metrics Not Scraped
+
+If GPU metrics are not being collected by Prometheus:
+
+```bash
+# Check if DCGM Exporter is providing metrics
+kubectl port-forward service/dcgm-exporter 9400:9400 -n gpu-monitoring &
+sleep 3
+curl -s http://localhost:9400/metrics | grep DCGM_FI_DEV_GPU_UTIL | head -1
+kill $!
+
+# Check Prometheus additional scrape configs
+kubectl get prometheus -n prometheus -o yaml | grep -A 10 additionalScrapeConfigs
+
+# Apply GPU metrics configuration using the provided script
+./scripts/configure-gpu-metrics.sh
 ```
 
 ## Cleanup

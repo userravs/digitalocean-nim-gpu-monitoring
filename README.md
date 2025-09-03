@@ -2,7 +2,7 @@
 
 This lab guides you through deploying NVIDIA NIM on DigitalOcean Kubernetes (DOKS) with GPU support and proper authentication setup.
 
-**✅ Current Status**: This lab has been tested and validated with DigitalOcean H100 GPU clusters. The DCGM Exporter approach has been simplified to work reliably with DigitalOcean's GPU node configurations.
+**✅ Current Status**: This lab has been tested and validated with DigitalOcean H100 GPU clusters. The DCGM Exporter approach has been simplified to work reliably with DigitalOcean's GPU node configurations. Prometheus and Grafana monitoring stack is deployed and operational.
 
 ## Quick Start Summary
 
@@ -154,7 +154,15 @@ kubectl taint nodes --all nvidia.com/gpu:NoSchedule-
 # This is handled in the Prometheus setup documentation
 ```
 
-**For detailed Prometheus setup instructions**, see [docs/prometheus-setup.md](docs/prometheus-setup.md). The repository includes a pre-configured `prometheus-values.yaml` file for standardized deployments.
+**For comprehensive monitoring setup and configuration**, see [docs/monitoring-guide.md](docs/monitoring-guide.md). This guide covers:
+- Complete Prometheus and Grafana setup
+- GPU metrics configuration
+- Dashboard creation and import
+- Troubleshooting and best practices
+
+**For individual component guides:**
+- [Prometheus Setup](docs/prometheus-setup.md)
+- [Grafana Configuration](docs/grafana-setup.md)
 
 ## Step 4: Deploy NVIDIA NIM (Optimized for H100)
 
