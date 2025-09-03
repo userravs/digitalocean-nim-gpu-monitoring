@@ -1,0 +1,41 @@
+dcgmExporter:
+  enabled: true
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+
+gfd:
+  enabled: true
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+
+nvidiaFeatureDiscovery:
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+
+driver:
+  enabled: false
+
+devicePlugin:
+  enabled: false
+
+migManager:
+  enabled: false
+
+operator:
+  defaultRuntime: containerd
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+
+node-feature-discovery:
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
