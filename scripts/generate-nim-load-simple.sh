@@ -7,9 +7,18 @@ set -e
 
 # Configuration
 NIM_URL="http://localhost:8000"
-DURATION=${1:-300}  # Default 5 minutes
-RATE=${2:-10}       # Default 10 requests per second
-CONCURRENT=${3:-5}  # Default 5 concurrent requests
+
+# Check for help before setting variables
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    # Set dummy values for help display
+    DURATION="--helps"
+    RATE="10"
+    CONCURRENT="5"
+else
+    DURATION=${1:-300}  # Default 5 minutes
+    RATE=${2:-10}       # Default 10 requests per second
+    CONCURRENT=${3:-5}  # Default 5 concurrent requests
+fi
 
 # Colors for output
 RED='\033[0;31m'
@@ -86,7 +95,7 @@ EOF
     # Parse response
     local http_code=$(echo "$response" | tail -2 | head -1)
     local curl_time=$(echo "$response" | tail -1)
-    local response_body=$(echo "$response" | head -n -2)
+    local response_body=$(echo "$response" | sed '$d' | sed '$d')
     
     # Calculate duration (simplified)
     local duration=$(echo "$end_time - $start_time" | awk '{printf "%.3f", $1 - $2}')
@@ -179,7 +188,7 @@ cleanup() {
 # Set up signal handlers
 trap cleanup SIGINT SIGTERM
 
-# Main execution
+# Check for help
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
     show_usage
     exit 0
