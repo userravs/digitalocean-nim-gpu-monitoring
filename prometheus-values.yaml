@@ -1,0 +1,76 @@
+# Prometheus Stack Values for DigitalOcean GPU Clusters
+# This file configures the kube-prometheus-stack for GPU monitoring
+
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false
+    
+    # GPU tolerations for DigitalOcean H100 nodes
+    tolerations:
+    - key: nvidia.com/gpu
+      operator: Equal
+      value: ""
+      effect: NoSchedule
+    
+    # Additional scrape configs for GPU metrics
+    additionalScrapeConfigs:
+    - job_name: gpu-metrics
+      scrape_interval: 1s
+      metrics_path: /metrics
+      scheme: http
+      kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names:
+          - gpu-monitoring
+      relabel_configs:
+      - source_labels: [__meta_kubernetes_endpoints_name]
+        action: drop
+        regex: .*-node-feature-discovery-master
+      - source_labels: [__meta_kubernetes_pod_node_name]
+        action: replace
+        target_label: kubernetes_node
+
+  service:
+    type: NodePort
+    nodePort: 30090
+
+grafana:
+  # GPU tolerations for DigitalOcean H100 nodes
+  tolerations:
+  - key: nvidia.com/gpu
+    operator: Equal
+    value: ""
+    effect: NoSchedule
+  
+  # Default admin credentials
+  adminPassword: prom-operator
+  
+  # Enable persistence (optional)
+  persistence:
+    enabled: true
+    size: 10Gi
+
+alertmanager:
+  # GPU tolerations for DigitalOcean H100 nodes
+  tolerations:
+  - key: nvidia.com/gpu
+    operator: Equal
+    value: ""
+    effect: NoSchedule
+
+# Node exporter configuration
+prometheus-node-exporter:
+  tolerations:
+  - key: nvidia.com/gpu
+    operator: Equal
+    value: ""
+    effect: NoSchedule
+
+# Kube state metrics configuration
+kube-state-metrics:
+  tolerations:
+  - key: nvidia.com/gpu
+    operator: Equal
+    value: ""
+    effect: NoSchedule

@@ -11,16 +11,18 @@ This lab guides you through deploying NVIDIA NIM on DigitalOcean Kubernetes (DOK
 2. **Step 1** - Create H100 GPU cluster on DigitalOcean
 3. **Step 2** - Install NVIDIA Device Plugin for basic GPU support
 4. **Step 3** - Install DCGM Exporter (simplified approach for GPU monitoring)
-5. **Step 4** - Deploy NVIDIA NIM with proper authentication secrets
-6. **Step 5** - Test NIM API functionality
-7. **Step 6** - Cost optimization strategies
-8. **Step 7** - Cleanup procedures
+5. **Step 3.5** - Handle GPU Node Taints (optional, for monitoring setup)
+6. **Step 4** - Deploy NVIDIA NIM with proper authentication secrets
+7. **Step 5** - Test NIM API functionality
+8. **Step 6** - Cost optimization strategies
+9. **Step 7** - Cleanup procedures
 
 **Key Requirements:**
 - Valid NGC API key in `.env` file as `NVIDIA_API_KEY`
 - DCGM Exporter for GPU monitoring (simplified approach)
 - Correct secret names: `NGC_API_KEY` (not `NGC_CLI_API_KEY`)
 - DigitalOcean GPU nodes with `nvidia.com/gpu=1` label
+- **Note**: GPU nodes have taints that may affect monitoring deployments
 
 ## Prerequisites
 
@@ -135,7 +137,24 @@ curl localhost:9400/metrics | head -10
 # Verify DCGM Exporter is working correctly
 kubectl logs -n gpu-monitoring -l app=dcgm-exporter | grep "Starting webserver"
 
+## Step 3.5: Handle GPU Node Taints (Optional - For Monitoring)
 
+**⚠️ IMPORTANT**: DigitalOcean H100 GPU nodes have a taint `nvidia.com/gpu:NoSchedule` that prevents non-GPU workloads from being scheduled. This affects monitoring tools like Prometheus.
+
+**If you plan to deploy Prometheus monitoring**, you need to address this taint:
+
+```bash
+# Check current node taints
+kubectl describe node | grep -A 5 Taints
+
+# Option A: Remove GPU taint (Recommended for single-node clusters)
+kubectl taint nodes --all nvidia.com/gpu:NoSchedule-
+
+# Option B: Add tolerations to monitoring workloads (for multi-node clusters)
+# This is handled in the Prometheus setup documentation
+```
+
+**For detailed Prometheus setup instructions**, see [docs/prometheus-setup.md](docs/prometheus-setup.md). The repository includes a pre-configured `prometheus-values.yaml` file for standardized deployments.
 
 ## Step 4: Deploy NVIDIA NIM (Optimized for H100)
 
