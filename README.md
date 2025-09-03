@@ -68,6 +68,7 @@ nano .env
 **Important**: Make sure to update the `NVIDIA_API_KEY` in the `.env` file with your actual NVIDIA API key before proceeding.
 
 ### Verify NGC API Key
+
 Before starting the lab, verify your NGC API key is valid:
 
 ```bash
@@ -78,8 +79,6 @@ curl -H "Authorization: Bearer YOUR_NGC_API_KEY" \
 # If successful, you'll get a JSON response with model details
 # If failed, you'll get a 401 error - update your API key
 ```
-
-
 
 ## Step 1: Create DigitalOcean H100 Cluster
 
@@ -222,8 +221,6 @@ Deploy NVIDIA NIM using the official NGC Helm chart. We'll use Llama 3.1 8B whic
 
 **Without a valid API key, the NIM deployment will fail with 401 Unauthorized errors.**
 
-
-
 ```bash
 # Load environment variables from .env file
 source .env
@@ -273,13 +270,6 @@ kubectl get pods -n ${NIM_NAMESPACE}
 # Monitor pod startup (H100 models take longer to load)
 kubectl logs -f my-nim-nim-llm-0 -n ${NIM_NAMESPACE}
 ```
-```
-
-
-
-
-
-
 
 ## Step 5: Test NIM API
 
@@ -310,8 +300,6 @@ curl -X 'POST' \
     "temperature": 0.7
   }'
 ```
-
-
 
 ## Step 6: Cost Optimization
 
@@ -416,8 +404,6 @@ kubectl label pod nvidia-dcgm-exporter-xxxxx app.kubernetes.io/name=dcgm-exporte
 # Verify service has endpoints
 kubectl get endpoints nvidia-dcgm-exporter -n gpu-operator
 ```
-
-
 
 ## Summary
 
